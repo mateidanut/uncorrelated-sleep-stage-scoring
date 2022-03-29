@@ -157,29 +157,20 @@ def train_pcas(sample_patient_data, X_train, n_samples_per_class):
     return pcas
 
 
-def sample_classifier_data(sample_patient_data, patients, classif_train_thresh, n_samples_per_class):
-    patients_train = patients[:classif_train_thresh]
-    patients_test = patients[classif_train_thresh:]
-
-    X_train, y_train = sample_patient_data(patients_train, n_samples_per_class=n_samples_per_class)
-    X_valid, y_valid = sample_patient_data(patients_test, n_samples_per_class=n_samples_per_class)
+def sample_classifier_data(sample_patient_data, patients, n_samples_per_class):
+    X_train, y_train = sample_patient_data(patients, n_samples_per_class=n_samples_per_class)
     
-    return X_train, X_valid, y_train, y_valid
+    return X_train, y_train
 
 
-def train_classifiers(pcas, X_train, X_valid, y_train, y_valid):
+def train_classifiers(pcas, X_train, y_train):
     # preprocess with pca
-    Xs = []
-    for X in (X_train, X_valid):
-        X_pcas = pcas[0].transform(X)
+    X_train_sparse = pcas[0].transform(X_train)
 
-        for pca in pcas[1:]:
-            X_pca = pca.transform(X)
-            X_pcas = np.hstack((X_pcas, X_pca))
+    for pca in pcas[1:]:
+        X_pca = pca.transform(X_train)
+        X_train_sparse = np.hstack((X_train_sparse, X_pca))
 
-        Xs.append(X_pcas)
-
-    X_train_sparse, X_valid_sparse = Xs
     
     # define models
     knn = KNeighborsClassifier(7)
@@ -190,32 +181,23 @@ def train_classifiers(pcas, X_train, X_valid, y_train, y_valid):
 
     # standardize data first
     scaler = StandardScaler()
-
     X_train_std = scaler.fit_transform(X_train_sparse)
-    X_valid_std = scaler.transform(X_valid_sparse)
 
-    results = []
     for model in classifiers:
         model.fit(X_train_std, y_train)
-        y_pred = model.predict(X_valid_std)
-
-#         print(model.__class__.__name__)
-#         print(classification_report(y_valid, y_pred))
-        d = classification_report(y_valid, y_pred, output_dict=True)
-        results.append((d['accuracy'], d['macro avg']['f1-score']))
         
-    return scaler, classifiers, list(zip(*results))
+    return scaler, classifiers
 
 
-def fit_models(sample_patient_data, train_patients, n_samples_per_class, *, pca_classif_thresh=60, classif_train_thresh=48):
+def fit_models(sample_patient_data, train_patients, n_samples_per_class, *, pca_classif_thresh=60):
     patients_pca = train_patients[:pca_classif_thresh]
     patients_classif = train_patients[pca_classif_thresh:]
     
     pcas = train_pcas(sample_patient_data, patients_pca, n_samples_per_class)
-    X_train, X_valid, y_train, y_valid = sample_classifier_data(sample_patient_data, patients_classif, classif_train_thresh, n_samples_per_class)
+    X_train, y_train = sample_classifier_data(sample_patient_data, patients_classif, n_samples_per_class)
     
-    scaler, classifiers, results = train_classifiers(pcas, X_train, X_valid, y_train, y_valid)
-    return pcas, scaler, classifiers, results
+    scaler, classifiers  = train_classifiers(pcas, X_train, y_train)
+    return pcas, scaler, classifiers
 
 
 def test_models(sample_patient_data, test_patients, pcas, scaler, classifiers):
@@ -246,15 +228,15 @@ def plot_results(n_samples, results):
     fig.suptitle('Classification perfomance by number of sampled epochs')
     
     for i, (metric, metric_name) in enumerate([('acc', 'Accuracy'), ('f1', 'F1-score')]):
-        valid_res = list(zip(*results[metric]['valid']))
+        #valid_res = list(zip(*results[metric]['valid']))
         test_res = list(zip(*results[metric]['test']))
         
         axs[i].plot(n_samples, test_res[0], 'r-', label='knn_test')
         axs[i].plot(n_samples, test_res[1], 'g-', label='svm_test')
         axs[i].plot(n_samples, test_res[2], 'b-', label='mlp_test')
-        axs[i].plot(n_samples, valid_res[0], 'r:', label='knn_valid')
-        axs[i].plot(n_samples, valid_res[1], 'g:', label='svm_valid')
-        axs[i].plot(n_samples, valid_res[2], 'b:', label='mlp_valid')
+        #axs[i].plot(n_samples, valid_res[0], 'r:', label='knn_valid')
+        #axs[i].plot(n_samples, valid_res[1], 'g:', label='svm_valid')
+        #axs[i].plot(n_samples, valid_res[2], 'b:', label='mlp_valid')
         axs[i].set(xlabel='Number of samples / class / patient', ylabel=metric_name)
         axs[i].legend()
         axs[i].grid()
@@ -288,14 +270,12 @@ def run_experiment():
 #     n_samples_per_class = 10
 #     sample_counts = list(range(1, 100))
 
-    #n_samples = list(range(1, 90, 10))
-    n_samples = list(range(1, 90, 1))
+    n_samples = list(range(1, 90, 10))
+    #n_samples = list(range(1, 90, 1))
     
 #     n_samples = list(range(1, 3))
     for train_samples_per_class in tqdm(n_samples):
-        pcas, scaler, classifiers, (acc_valid, f1_valid) = fit_models(eeg_sampler, train_patients, train_samples_per_class)
-        results['acc']['valid'].append(acc_valid)
-        results['f1']['valid'].append(f1_valid)
+        pcas, scaler, classifiers = fit_models(eeg_sampler, train_patients, train_samples_per_class)
 
         acc_test, f1_test = test_models(eeg_sampler, test_patients, pcas, scaler, classifiers)
         results['acc']['test'].append(acc_test)
