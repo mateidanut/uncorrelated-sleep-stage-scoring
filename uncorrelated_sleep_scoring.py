@@ -8,6 +8,7 @@ from sklearn.svm import SVC
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from sklearn.metrics import classification_report
+from sklearn.dummy import DummyClassifier
 from tqdm import tqdm
 import h5py
 import numpy as np
@@ -177,7 +178,10 @@ def train_classifiers(pcas, X_train, y_train):
     svm = SVC(kernel="linear", C=0.025)
     mlp = MLPClassifier(alpha=1, max_iter=1000, activation='relu')
 
-    classifiers = [knn, svm, mlp]
+    dummy = DummyClassifier(strategy='constant', constant=2)
+    one_nn = KNeighborsClassifier(1)
+
+    classifiers = [knn, svm, mlp, dummy, one_nn]
 
     # standardize data first
     scaler = StandardScaler()
@@ -196,13 +200,13 @@ def fit_models(sample_patient_data, train_patients, n_samples_per_class, *, pca_
     pcas = train_pcas(sample_patient_data, patients_pca, n_samples_per_class)
     X_train, y_train = sample_classifier_data(sample_patient_data, patients_classif, n_samples_per_class)
     
-    scaler, classifiers  = train_classifiers(pcas, X_train, y_train)
+    scaler, classifiers = train_classifiers(pcas, X_train, y_train)
     return pcas, scaler, classifiers
 
 
 def test_models(sample_patient_data, test_patients, pcas, scaler, classifiers):
     X_test, y_test = sample_patient_data(test_patients)
-    
+
     X_pcas = pcas[0].transform(X_test)
 
     for pca in pcas[1:]:
@@ -228,15 +232,21 @@ def plot_results(n_samples, results):
     fig.suptitle('Classification perfomance by number of sampled epochs')
     
     for i, (metric, metric_name) in enumerate([('acc', 'Accuracy'), ('f1', 'F1-score')]):
-        #valid_res = list(zip(*results[metric]['valid']))
         test_res = list(zip(*results[metric]['test']))
         
         axs[i].plot(n_samples, test_res[0], 'r-', label='knn_test')
         axs[i].plot(n_samples, test_res[1], 'g-', label='svm_test')
         axs[i].plot(n_samples, test_res[2], 'b-', label='mlp_test')
-        #axs[i].plot(n_samples, valid_res[0], 'r:', label='knn_valid')
-        #axs[i].plot(n_samples, valid_res[1], 'g:', label='svm_valid')
-        #axs[i].plot(n_samples, valid_res[2], 'b:', label='mlp_valid')
+
+        if metric == 'acc':
+            axs[i].plot(n_samples, test_res[3], 'o-', label='majority_class_test')
+            #axs[i].plot(n_samples, test_res[4], 'o-', label='one_nn_test')
+
+            one_nn_error = 1 - np.array(test_res[4])
+            bayes_error = one_nn_error / 2
+            bayes_accuracy = 1 - bayes_error
+            axs[i].plot(n_samples, bayes_accuracy, 'o-', label='bayes_classifier_test')
+
         axs[i].set(xlabel='Number of samples / class / patient', ylabel=metric_name)
         axs[i].legend()
         axs[i].grid()
@@ -270,7 +280,8 @@ def run_experiment():
 #     n_samples_per_class = 10
 #     sample_counts = list(range(1, 100))
 
-    n_samples = list(range(1, 90, 10))
+    n_samples = list(range(1, 90, 50))
+    #n_samples = list(range(1, 90, 20))
     #n_samples = list(range(1, 90, 1))
     
 #     n_samples = list(range(1, 3))
