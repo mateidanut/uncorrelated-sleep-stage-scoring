@@ -21,6 +21,8 @@ from scipy.io import loadmat
 
 from pympler import asizeof
 
+import multiprocessing
+
 def load_data_spectrogram(eeg_files, idx):
     with h5py.File(eeg_files[idx], 'r') as f:
         X = np.array(f['X'])
@@ -50,49 +52,55 @@ def load_data_signal(scans, idx):
     return data[..., 0], labels
 
 
-#def make_data_sampler_slow(data_type='spectrogram'):
-#    if data_type == 'signal':
-#        data_files = ['./raw_data/' + f for f in sorted(os.listdir('./raw_data'))]
-#        load_data = load_data_signal
-#    elif data_type == 'spectrogram':
-#        data_files = ['./mat/' + f for f in sorted(os.listdir('./mat')) if f.endswith('eeg.mat')]
-#        load_data = load_data_spectrogram
-#    else:
-#        raise ValueError('data_type can only be "spectrogram" or "signal"!')
-#
-#    def sample_patient_data(indices, n_samples_per_class=None, classes=None):
-#        X_avg = []
-#        y_true = []
-#
-##         for idx in tqdm(indices):
-#        for idx in indices:
-#            X, y = load_data(data_files, idx)
-#
-#            if n_samples_per_class is None:
-#                X_avg.append(X)
-#                y_true.append(y)
-#                continue
-#
-#            p = rng.permutation(np.arange(len(y)))
-#            # shuffle X and y
-#            X, y = X[p, :], y[p]
-#
-#            # sample equally from each class, for each patient
-#            if classes is None:
-#                classes = list(range(5))
-#
-#            for cls in classes:
-#                sample = np.where(y == cls)[0][:n_samples_per_class]
-##                 print('UNIQ', np.unique(y))
-##                 print('CLS', cls, sample)
-#                X_avg.append(X[sample])
-#                y_true.append(y[sample])
-#                
-##             print(len(X_avg), X_avg[0].shape)
-#
-#        return np.concatenate(tuple(X_avg)), np.concatenate(tuple(y_true))
-#    
-#    return sample_patient_data, len(data_files)
+
+class DataSampler():
+    def __init__(self, data_type='spectrogram'):
+        if data_type == 'signal':
+            data_files = ['./raw_data/' + f for f in sorted(os.listdir('./raw_data'))]
+            load_data = load_data_signal
+        elif data_type == 'spectrogram':
+            data_files = ['./mat/' + f for f in sorted(os.listdir('./mat')) if f.endswith('eeg.mat')]
+            load_data = load_data_spectrogram
+        else:
+            raise ValueError('data_type can only be "spectrogram" or "signal"!')
+
+        all_data = [load_data(data_files, idx) for idx in range(len(data_files))]
+        self.X_full, self.y_full = zip(*all_data)
+        self.data_count = len(data_files)
+
+
+    def __call__(self, indices, n_samples_per_class=None, classes=None):
+        X_avg = []
+        y_true = []
+
+        for idx in indices:
+            #X, y = load_data(data_files, idx)
+            X, y = self.X_full[idx], self.y_full[idx]
+
+            if n_samples_per_class is None:
+                X_avg.append(X)
+                y_true.append(y)
+                continue
+
+            p = rng.permutation(np.arange(len(y)))
+            # shuffle X and y
+            X, y = X[p, :], y[p]
+
+            # sample equally from each class, for each patient
+            if classes is None:
+                classes = list(range(5))
+
+            for cls in classes:
+                sample = np.where(y == cls)[0][:n_samples_per_class]
+#                 print('UNIQ', np.unique(y))
+#                 print('CLS', cls, sample)
+                X_avg.append(X[sample])
+                y_true.append(y[sample])
+                
+#             print(len(X_avg), X_avg[0].shape)
+
+        return np.concatenate(tuple(X_avg)), np.concatenate(tuple(y_true))
+
 
 
 def make_data_sampler(data_type='spectrogram'):
@@ -204,8 +212,9 @@ def fit_models(sample_patient_data, train_patients, n_samples_per_class, *, pca_
     return pcas, scaler, classifiers
 
 
-def test_models(sample_patient_data, test_patients, pcas, scaler, classifiers):
-    X_test, y_test = sample_patient_data(test_patients)
+#def test_models(sample_patient_data, test_patients, pcas, scaler, classifiers):
+    #X_test, y_test = sample_patient_data(test_patients)
+def test_models(X_test, y_test, pcas, scaler, classifiers):
 
     X_pcas = pcas[0].transform(X_test)
 
@@ -229,70 +238,73 @@ def test_models(sample_patient_data, test_patients, pcas, scaler, classifiers):
 
 def plot_results(n_samples, results):
     fig, axs = plt.subplots(2, 1, figsize=(15, 10))
-    fig.suptitle('Classification perfomance by number of sampled epochs')
+    fig.suptitle('Classification perfomance on the test set')
     
     for i, (metric, metric_name) in enumerate([('acc', 'Accuracy'), ('f1', 'F1-score')]):
-        test_res = list(zip(*results[metric]['test']))
+        test_res = list(zip(*results[metric]))
+        #print('test_res', test_res)
         
-        axs[i].plot(n_samples, test_res[0], 'r-', label='knn_test')
-        axs[i].plot(n_samples, test_res[1], 'g-', label='svm_test')
-        axs[i].plot(n_samples, test_res[2], 'b-', label='mlp_test')
+        axs[i].plot(n_samples, test_res[0], 'r-', label='knn')
+        axs[i].plot(n_samples, test_res[1], 'g-', label='svm')
+        axs[i].plot(n_samples, test_res[2], 'b-', label='mlp')
 
         if metric == 'acc':
-            axs[i].plot(n_samples, test_res[3], 'o-', label='majority_class_test')
-            #axs[i].plot(n_samples, test_res[4], 'o-', label='one_nn_test')
+            axs[i].plot(n_samples, test_res[3], 'o-', label='majority_class')
+            #axs[i].plot(n_samples, test_res[4], 'o-', label='one_nn')
 
             one_nn_error = 1 - np.array(test_res[4])
             bayes_error = one_nn_error / 2
             bayes_accuracy = 1 - bayes_error
-            axs[i].plot(n_samples, bayes_accuracy, 'o-', label='bayes_classifier_test')
+            axs[i].plot(n_samples, bayes_accuracy, 'o-', label='bayes_classifier')
 
         axs[i].set(xlabel='Number of samples / class / patient', ylabel=metric_name)
         axs[i].legend()
         axs[i].grid()
     
     plt.show()
-    
-        
+
+
 def run_experiment():
     rng = default_rng(42)
     
-    eeg_sampler, data_count = make_data_sampler()
+    #eeg_sampler, data_count = make_data_sampler()
+    eeg_sampler = DataSampler()
+    data_count = eeg_sampler.data_count
 
     TRAIN_SIZE = int(.8 * data_count)
     patient_permutation = rng.permutation(data_count)
 
     train_patients = patient_permutation[:TRAIN_SIZE]
     test_patients = patient_permutation[TRAIN_SIZE:]
+    X_test, y_test = eeg_sampler(test_patients)
+
     print(len(train_patients), len(test_patients))
     
     results = {
-        'acc': {
-            'valid': [],
-            'test': [],
-        },
-        'f1': {
-            'valid': [],
-            'test': [],
-        }
+        'acc': [],
+        'f1': [],
     }
     
-#     n_samples_per_class = 10
-#     sample_counts = list(range(1, 100))
+    n_samples = range(1, 90, 1)
 
-    n_samples = list(range(1, 90, 50))
-    #n_samples = list(range(1, 90, 20))
-    #n_samples = list(range(1, 90, 1))
-    
-#     n_samples = list(range(1, 3))
-    for train_samples_per_class in tqdm(n_samples):
-        pcas, scaler, classifiers = fit_models(eeg_sampler, train_patients, train_samples_per_class)
-
-        acc_test, f1_test = test_models(eeg_sampler, test_patients, pcas, scaler, classifiers)
-        results['acc']['test'].append(acc_test)
-        results['f1']['test'].append(f1_test)
+    pool = multiprocessing.Pool(20)
+    args = [(eeg_sampler, train_patients, X_test, y_test, i) for i in n_samples]
+    output = pool.starmap(train_test_classifiers_global, args)
+    results['acc'], results['f1'] = zip(*output)
         
     plot_results(n_samples, results)
-    
-#     print(results['acc'])
-#     print(results['f1'])
+
+
+def train_test_classifiers_global(eeg_sampler, train_patients, X_test, y_test, train_samples_per_class):
+    acc_tests, f1_tests = [], []
+    # use boosting to make results more consistent
+    for _ in range(10):
+        pcas, scaler, classifiers = fit_models(eeg_sampler, train_patients, train_samples_per_class)
+        acc_test, f1_test = test_models(X_test, y_test, pcas, scaler, classifiers)
+        acc_tests.append(acc_test)
+        f1_tests.append(f1_test)
+
+    mean_acc = tuple(np.array(acc_tests).mean(axis=0))
+    mean_f1 = tuple(np.array(f1_tests).mean(axis=0))
+
+    return mean_acc, mean_f1
